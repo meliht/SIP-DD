@@ -18,27 +18,18 @@ Statistics Module collects a window of traffic periodically (hourly, daily, week
 When the current traffic rate reaches the attack traffic threshold, the Inspection Module becomes active and compares the normal traffic pattern to the suspected attack traffic pattern. Inspecting the SIP specifications that include the headers and tags in SIP messages such as Call-ID, from tag, branch tag, etc. running the following attack-specific detection rules, the mechanism aims to identify how much of the suspicious traffic is auto-generated and should be dropped/blocked in Action module of the defense mechanism.
  
 •	Rule 1: Incoming SIP connections/requests per second from a single source IP address.
-
 •	Rule 2: Incoming SIP connections/requests per second to a single destination IP address.
-
 •	Rule 3: Incoming SIP connections, including retransmission, from a single source IP address.
-
 •	Rule 4: Incoming SIP connections, including retransmission, to a single destination IP address.
 
 Current features:
-
 •	Multi-threading rate control
-
 •	Write live traffic to Pcap files (hourly, weekly, monthly, daily) (appending is supported) 
-
 •	If app closed/opened, writing PCAP files and sniffing resumes from where it was (all edge/limit counters make their calculations with respect to these absences) 
-
 •	Calculate all limit/edge values defined in the spec. 
-
 •	Calculate rule counters defined in the spec. 
 
 Future feaures:
-
 •	If there is an attack, SIP-DD will catch the IP address, print it to the console, send email alarms, active blocking mechanism and check if it is an retransmission attack.  
 
 Usage: 
