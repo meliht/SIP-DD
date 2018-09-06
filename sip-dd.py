@@ -1,4 +1,3 @@
-
 import os
 import time
 import argparse
@@ -6,6 +5,7 @@ import calendar
 import datetime
 import threading
 import pickle
+from datetime import timedelta
 from collections import defaultdict, Counter
 from scapy.all import *
 
@@ -19,12 +19,12 @@ def _get_dump_file_names():
     weekly/21-28_Nov.2017
     monthly/Nov.2017
     """
-    now = datetime.datetime.now()
+    now = datetime.now()
 
     abbr_month_name = calendar.month_name[now.month][:3]
-    start_day_of_week = (now - datetime.timedelta(days=now.weekday())).day
-    end_day_of_week = (now - datetime.timedelta(days=now.weekday()) + \
-        datetime.timedelta(days=7)).day
+    start_day_of_week = (now - timedelta(days=now.weekday())).day
+    end_day_of_week = (now - timedelta(days=now.weekday()) + \
+        timedelta(days=7)).day
 
     hfn = 'hourly/%d:00-%d:00_%d.%s.%d' % (now.hour, now.hour+1, now.day, 
         abbr_month_name, now.year)
@@ -84,9 +84,10 @@ class SipDDSniffer(object):
         return (self.suspect_edge(period) / MAX_UDP_SIP_PACKET_SIZE)
     
     def attack_limit(self, period):
-        return (self.attack_limit(period) / MAX_UDP_SIP_PACKET_SIZE)
+        return (self.attack_edge(period) / MAX_UDP_SIP_PACKET_SIZE)
     
     def _calc_rate(self):
+        PACKET_DROP_INTERVAL = 5*60 # secs
         prev_tot_len = self.total_len_in_bytes
         while(True):
             self.current_rate_in_kpbs = \
@@ -108,30 +109,29 @@ class SipDDSniffer(object):
                     for rule_no, counter in self.counters['rules'].items():
                         for ip, v in counter.items():
                             if v > self.suspect_limit(period):
-                                print('Send email as "Rule X is activated. There may be an attack from SourceIP to DestinationIP."')
-                    
-                    """
-                    If any of rules higher than SL, then 
-                        Detect Mode is activated and creates alarm
-                            Send email as "Rule X is activated. There may be an attack from SourceIP to DestinationIP."
-                    If the current SIP traffic rate is higher than AL, then
-                        Drop Mode is activated and creates alarm
-                            Send email as "There was an attack from SourceIP to DestinationIP and SIP packets from SourceIP are being dropped for 5 minutes."
-                            Drop SIP packets from SourceIP for 5 minutes.
-                    If the current SIP traffic rate is still more than 5% below the Inbound Packet Rate Limit, then
-                        Block Mode is activated and creates alarm
-                            Send email as "There was an attack from SourceIP to DestinationIP and SourceIP is blocked for 5 minutes.
-                    """
+                                print('Rule %d is activated. There may be an attack'
+                                    ' from %s.' % (rule_no, ip))
+                                # TODO: Send email
+                            if v > self.attack_limit(period):
+                                print('There was an attack from %s. SIP packets are being'
+                                    ' blocked for %d mins.' % (ip, PACKET_DROP_INTERVAL//60))
+                                # TODO: Send email
+                                # TODO: Drop packets
+                            # current SIP traffic is more than %95 of SIP packet rate limit
+                            if v >= ((95*self.in_packet_rate_limit) // 100):
+                                print('There was an attack from %s.(in_packet_rate saturated.) SIP packets are being'
+                                    ' blocked for %d mins.' % (ip, PACKET_DROP_INTERVAL//60))
+                                # TODO: Send email
+                                # TODO: Drop packets
 
             # counters hold the rule related data
-            self.counters = {'rules': {1: Counter(), 2: Counter(), 3: Counter(), 4: Counter()}
-                             '_rule3_per_cseq': defaultdict(Counter),
-                             '_rule4_per_cseq': defaultdict(Counter),}
+            self.counters = {'rules': {1: Counter(), 2: Counter(),}}
 
             time.sleep(RATE_CALCULATE_INTERVAL)
 
     def _on_pkt_recv(self, pkt):
         try:
+            print("packet received...")
             for _, file_name in _get_dump_file_names():
                 wrpcap(file_name + '.pcap', pkt, append=True)
             
@@ -140,15 +140,15 @@ class SipDDSniffer(object):
             try:
                 # TODO: For lab purpose we will use the IP address in From header in the Application Layer.
                 src_ip = pkt[IP].src
-                dst_ip = pkt[IP].src
-                sip_data = pkt[Raw].load.decode("ascii")
-                
+                dst_ip = pkt[IP].dst
+                sip_data = pkt[Raw].load.decode('utf-8')
+
                 # TODO: I am sure there is a better alternative to extract CSeq 
                 # value from a sip msg but this simply works.
                 cseq = None
                 sip_data_splitted = sip_data.split()
                 for i, a in enumerate(sip_data_splitted):
-                    if a == 'CSeq:':
+                    if a == b'CSeq:':
                         cseq = sip_data_splitted[i+1]
                         break
                 if cseq is None:
@@ -163,18 +163,6 @@ class SipDDSniffer(object):
             # Rule-2
             if any(x in sip_data for x in ['INVITE sip', 'REGISTER sip']):
                 self.counters['rules'][2][dst_ip] += 1
-            
-            # Rule-3
-            if any(x in sip_data for x in ['INVITE sip', 'REGISTER sip']):
-                self.counters['_rule3_per_cseq'][src_ip][cseq] += 1
-                self.counters['rules'][3][src_ip] = \
-                    min(2, (self.counters['_rule3_per_cseq'][src_ip][cseq]//4)+1)
-
-            # Rule-4
-            if any(x in sip_data for x in ['INVITE sip', 'REGISTER sip']):
-                self.counters['_rule4_per_cseq'][dst_ip][cseq] += 1
-                self.counters['rules'][4][dst_ip] = \
-                    min(2, (self.counters['_rule4_per_cseq'][dst_ip][cseq]//4)+1)
 
         except Exception as e:
             import traceback; traceback.print_exc()
@@ -201,7 +189,7 @@ def main():
 
     args = parser.parse_args()
 
-    # ensure PCAP dirs are in place
+    # ensure save output dirs are in place
     for d in ['daily', 'hourly', 'weekly', 'monthly']:
         if not os.path.exists(d):
             os.makedirs(d)
